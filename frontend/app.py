@@ -2,7 +2,7 @@ import requests
 import streamlit as st
 
 
-API_URL = "http://127.0.0.1:8000/recommend"
+API_URL = "https://recipe-recommendation-ai.onrender.com/recommend"
 
 
 st.set_page_config(
