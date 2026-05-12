@@ -6,6 +6,11 @@ from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import hstack
 
 _CSV_PATH = Path(__file__).resolve().parents[1] / "data" / "recipes.csv"
+if not _CSV_PATH.exists():
+    raise FileNotFoundError(
+        f"recipes.csv not found at {_CSV_PATH}. "
+        "Ensure `backend/data/recipes.csv` is committed and deployed (Render Root Directory = backend)."
+    )
 df = pd.read_csv(_CSV_PATH)
 
 # Normalize column names to safely index them
