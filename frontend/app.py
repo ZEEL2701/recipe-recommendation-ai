@@ -92,6 +92,12 @@ ingredients = st.text_input(
     key="ingredient_input",
 )
 
+allergies = st.text_input(
+    "Allergies (optional)",
+    placeholder="eg. egg, peanuts, milk",
+    key="allergies_input",
+)
+
 
 def fetch_recommendations():
     q = (st.session_state.get("ingredient_input") or "").strip()
@@ -101,9 +107,10 @@ def fetch_recommendations():
 
     api_url = _recommend_url()
     try:
+        allergies_val = (st.session_state.get("allergies_input") or "").strip()
         response = requests.post(
             api_url,
-            json={"ingredients": q},
+            json={"ingredients": q, "allergies": allergies_val or None},
             timeout=120,
             headers={"Content-Type": "application/json"},
         )
@@ -150,10 +157,19 @@ def fetch_ai_recipe():
         return
 
     gen_url = _generate_recipe_url()
+    allergies_val = (st.session_state.get("allergies_input") or "").strip()
+    best_recipe = (st.session_state.get("rec_list") or [{}])[0]
+    recipe_name = best_recipe.get("name")
+    recipe_ingredients = best_recipe.get("ingredients")
     try:
         gen_resp = requests.post(
             gen_url,
-            json={"ingredients": q},
+            json={
+                "ingredients": q,
+                "allergies": allergies_val or None,
+                "recipe_name": recipe_name,
+                "recipe_ingredients": recipe_ingredients,
+            },
             timeout=120,
             headers={"Content-Type": "application/json"},
         )
