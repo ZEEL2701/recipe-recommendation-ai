@@ -71,6 +71,19 @@ def _extract_json_object(text: str) -> dict:
     return json.loads(cleaned)
 
 
+def _normalize_cuisine(cuisine: Optional[str]) -> str:
+    return (cuisine or "").strip().lower()
+
+
+def _cuisine_matches(preferred: Optional[str], generated: str) -> bool:
+    pref = _normalize_cuisine(preferred)
+    if not pref:
+        return True
+    got = _normalize_cuisine(generated)
+    # Keep simple and practical: exact or contains either side.
+    return pref == got or pref in got or got in pref
+
+
 def _allergy_in_text(allergy: str, text: str) -> bool:
     term = allergy.lower().strip()
     if not term:
@@ -155,6 +168,7 @@ Rules:
         model=_DEFAULT_GROQ_MODEL,
         messages=[{"role": "user", "content": prompt.strip()}],
         temperature=0.7,
+        response_format={"type": "json_object"},
     )
 
     raw = response.choices[0].message.content or ""
@@ -176,6 +190,9 @@ Rules:
 
         combined = f"{name}\n{ing}\n{instr}"
         if any(_allergy_in_text(a, combined) for a in allergy_list):
+            continue
+
+        if not _cuisine_matches(cuisine_text if cuisine_text != "any" else None, cuisine):
             continue
 
         filtered.append(
@@ -230,6 +247,7 @@ Output ONLY valid JSON with this schema:
         model=_DEFAULT_GROQ_MODEL,
         messages=[{"role": "user", "content": prompt.strip()}],
         temperature=0.5,
+        response_format={"type": "json_object"},
     )
 
     raw = response.choices[0].message.content or ""
@@ -270,13 +288,21 @@ def recommend(data: RecommendationRequest):
     )
 
     if not recommendations:
-        raise HTTPException(
-            status_code=404,
-            detail=(
+        cuisine_hint = (data.cuisine or "").strip()
+        if cuisine_hint:
+            detail = (
+                f"No {cuisine_hint} recipes could be generated for those ingredients "
+                "with the current allergy constraints. Try another cuisine or adjust inputs."
+            )
+        else:
+            detail = (
                 "No recipes could be generated that satisfy your ingredients/allergies. "
                 "If you listed the same item as both an ingredient and an allergy, "
                 "please remove it from one of the fields or choose a substitute."
-            ),
+            )
+        raise HTTPException(
+            status_code=404,
+            detail=detail,
         )
 
     return {"recommendations": recommendations}
