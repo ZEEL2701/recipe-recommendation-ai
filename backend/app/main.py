@@ -83,6 +83,7 @@ def _allergy_in_text(allergy: str, text: str) -> bool:
 def generate_top_recipes_ai(
     ingredients: str,
     allergies: Optional[str],
+    cuisine: Optional[str],
     top_n: int = 3,
 ) -> List[dict]:
     """
@@ -114,6 +115,7 @@ def generate_top_recipes_ai(
     candidate_n = max(6, top_n * 2)
 
     allergy_text = ", ".join(allergy_list) if allergy_list else "none"
+    cuisine_text = (cuisine or "").strip() or "any"
 
     prompt = f"""
 You are a careful recipe generator.
@@ -123,6 +125,9 @@ User ingredients (use as inspiration; you may add common pantry staples if neede
 
 Allergies to avoid (must NOT appear in the recipe ingredients or instructions):
 {allergy_text}
+
+Preferred cuisine (strictly prefer this when possible):
+{cuisine_text}
 
 Task:
 Generate {candidate_n} candidate recipes. Then the API will filter to the top {top_n}
@@ -142,6 +147,7 @@ Rules:
   ]
 }}
 - Each recommendation must be a distinct dish.
+- If preferred cuisine is provided (not "any"), keep all recommendations in that cuisine.
 - Do not include any allergic ingredient (or close equivalents) anywhere in ingredients/instructions.
 """
 
@@ -191,10 +197,12 @@ def generate_recipe_detail_ai(
     recipe_name: str,
     recipe_ingredients: str,
     allergies: Optional[str],
+    cuisine: Optional[str],
 ) -> str:
     groq = _groq_client()
     allergy_list = _parse_allergies(allergies)
     allergy_text = ", ".join(allergy_list) if allergy_list else "none"
+    cuisine_text = (cuisine or "").strip() or "any"
 
     prompt = f"""
 You are writing the final detailed recipe for a dish selected by the recommender.
@@ -207,6 +215,9 @@ Base ingredients for the selected match (use these; you may refine amounts):
 
 Allergies to avoid (do not include in ingredients or instructions):
 {allergy_text}
+
+Preferred cuisine context:
+{cuisine_text}
 
 Output ONLY valid JSON with this schema:
 {{
@@ -254,6 +265,7 @@ def recommend(data: RecommendationRequest):
     recommendations = generate_top_recipes_ai(
         ingredients=data.ingredients,
         allergies=data.allergies,
+        cuisine=data.cuisine,
         top_n=3,
     )
 
@@ -282,6 +294,7 @@ def generate_recipe(data: RecommendationRequest):
         recipe_name=data.recipe_name,
         recipe_ingredients=data.recipe_ingredients or "",
         allergies=data.allergies,
+        cuisine=data.cuisine,
     )
 
     return {

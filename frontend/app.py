@@ -98,6 +98,24 @@ allergies = st.text_input(
     key="allergies_input",
 )
 
+cuisine = st.selectbox(
+    "Preferred Cuisine (optional)",
+    options=[
+        "Any",
+        "Indian",
+        "Italian",
+        "Chinese",
+        "Mexican",
+        "Thai",
+        "Mediterranean",
+        "American",
+        "Japanese",
+        "French",
+    ],
+    index=0,
+    key="cuisine_input",
+)
+
 
 def fetch_recommendations():
     q = (st.session_state.get("ingredient_input") or "").strip()
@@ -108,9 +126,14 @@ def fetch_recommendations():
     api_url = _recommend_url()
     try:
         allergies_val = (st.session_state.get("allergies_input") or "").strip()
+        cuisine_val = (st.session_state.get("cuisine_input") or "").strip()
         response = requests.post(
             api_url,
-            json={"ingredients": q, "allergies": allergies_val or None},
+            json={
+                "ingredients": q,
+                "allergies": allergies_val or None,
+                "cuisine": None if cuisine_val.lower() == "any" else cuisine_val,
+            },
             timeout=120,
             headers={"Content-Type": "application/json"},
         )
@@ -158,6 +181,7 @@ def fetch_ai_recipe():
 
     gen_url = _generate_recipe_url()
     allergies_val = (st.session_state.get("allergies_input") or "").strip()
+    cuisine_val = (st.session_state.get("cuisine_input") or "").strip()
     best_recipe = (st.session_state.get("rec_list") or [{}])[0]
     recipe_name = best_recipe.get("name")
     recipe_ingredients = best_recipe.get("ingredients")
@@ -167,6 +191,7 @@ def fetch_ai_recipe():
             json={
                 "ingredients": q,
                 "allergies": allergies_val or None,
+                "cuisine": None if cuisine_val.lower() == "any" else cuisine_val,
                 "recipe_name": recipe_name,
                 "recipe_ingredients": recipe_ingredients,
             },
