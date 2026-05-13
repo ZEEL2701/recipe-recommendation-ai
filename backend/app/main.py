@@ -74,8 +74,19 @@ def generate_top_recipes_ai(
     GenAI-only recommendation: generate top N recipes based on the user's ingredients
     and avoid any listed allergens.
     """
-    groq = _groq_client()
     allergy_list = _parse_allergies(allergies)
+
+    # If the user enters something both as ingredient and allergy, treat it strictly
+    # as an allergy: remove it from the inspiration text before sending to the model.
+    cleaned_ingredients = ingredients
+    for a in allergy_list:
+        if not a:
+            continue
+        pattern = rf"(?<![a-z0-9]){re.escape(a)}(?![a-z0-9])"
+        cleaned_ingredients = re.sub(pattern, " ", cleaned_ingredients, flags=re.IGNORECASE)
+    cleaned_ingredients = re.sub(r"\s+", " ", cleaned_ingredients).strip()
+
+    groq = _groq_client()
     candidate_n = max(6, top_n * 2)
 
     allergy_text = ", ".join(allergy_list) if allergy_list else "none"
@@ -84,7 +95,7 @@ def generate_top_recipes_ai(
 You are a careful recipe generator.
 
 User ingredients (use as inspiration; you may add common pantry staples if needed):
-{ingredients}
+{cleaned_ingredients}
 
 Allergies to avoid (must NOT appear in the recipe ingredients or instructions):
 {allergy_text}
@@ -225,7 +236,11 @@ def recommend(data: RecommendationRequest):
     if not recommendations:
         raise HTTPException(
             status_code=404,
-            detail="No recipes could be generated that satisfy your ingredients/allergies.",
+            detail=(
+                "No recipes could be generated that satisfy your ingredients/allergies. "
+                "If you listed the same item as both an ingredient and an allergy, "
+                "please remove it from one of the fields or choose a substitute."
+            ),
         )
 
     return {"recommendations": recommendations}
