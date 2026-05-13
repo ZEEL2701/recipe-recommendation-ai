@@ -18,6 +18,43 @@ df.columns = [str(c).strip().lower() for c in df.columns]
 
 df["ingredients"] = df["ingredients"].fillna("")
 
+# Irregular / tricky plurals (blind "strip trailing s" turns "tomatoes" → "tomatoe").
+_PLURAL_TO_SINGULAR = {
+    "tomatoes": "tomato",
+    "potatoes": "potato",
+    "onions": "onion",
+    "carrots": "carrot",
+    "beans": "bean",
+    "peas": "pea",
+    "mushrooms": "mushroom",
+    "noodles": "noodle",
+    "apples": "apple",
+    "bananas": "banana",
+    "mangoes": "mango",
+    "grapes": "grape",
+    "eggs": "egg",
+    "spices": "spice",
+    "herbs": "herb",
+    "lentils": "lentil",
+    "chickpeas": "chickpea",
+}
+
+# Fixes after naive singularization
+_TOKEN_FIXES = {
+    "tomatoe": "tomato",
+    "potatoe": "potato",
+}
+
+
+def _singularize_token(t: str) -> str:
+    if t in _PLURAL_TO_SINGULAR:
+        return _PLURAL_TO_SINGULAR[t]
+    if len(t) > 3 and t.endswith("s") and not t.endswith(("ss", "us", "is")):
+        stem = t[:-1]
+        return _TOKEN_FIXES.get(stem, stem)
+    return t
+
+
 def _normalize_ingredients(text: str) -> str:
     """
     Normalize ingredient text so small variants (e.g., potato vs potatoes, commas)
@@ -30,10 +67,7 @@ def _normalize_ingredients(text: str) -> str:
 
     normalized: list[str] = []
     for t in tokens:
-        if len(t) > 3 and t.endswith("s") and not t.endswith(("ss", "us")):
-            normalized.append(t[:-1])
-        else:
-            normalized.append(t)
+        normalized.append(_singularize_token(t))
 
     return " ".join(normalized)
 
@@ -41,6 +75,31 @@ def _normalize_ingredients(text: str) -> str:
 df["_ingredients_norm"] = df["ingredients"].map(_normalize_ingredients)
 df["_ingredients_tokens"] = df["_ingredients_norm"].str.split().map(lambda xs: [x for x in xs if x])
 df["_ingredients_token_count"] = df["_ingredients_tokens"].map(len)
+
+# For ranking: query words appearing in the recipe *title* (e.g. "tomato" → "Tomato Pasta").
+df["_name_tokens"] = (
+    df["name"].astype(str).map(_normalize_ingredients).str.split().map(lambda xs: set(x for x in xs if x))
+)
+
+# Unmatched tokens like egg/chicken when the user did not ask for them skew results; penalize lightly.
+_STRONG_EXTRAS = frozenset(
+    {
+        "egg",
+        "chicken",
+        "fish",
+        "paneer",
+        "beef",
+        "pork",
+        "mutton",
+        "lamb",
+        "turkey",
+        "prawn",
+        "shrimp",
+        "mushroom",
+        "chickpea",
+        "chickpeas",
+    }
+)
 
 _word_vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
 _char_vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5))
@@ -85,10 +144,17 @@ def recommend_recipes(user_input, top_n = 3, min_score: float = 0.08):
         precision = overlap / max(len(token_set), 1)  # how focused the recipe is
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
         extras = max(len(token_set) - overlap, 0)
+        extra_tokens = token_set - query_set
+        strong_extra_penalty = sum(3 if t in _STRONG_EXTRAS else 1 for t in extra_tokens)
+        name_hits = len(query_set & df.at[i, "_name_tokens"])
+        # Slight boost when the dish name echoes what the user typed (e.g. "tomato" → Tomato Pasta).
+        effective_match = float(f1) + 0.15 * float(name_hits)
 
-        # Sort descending by: F1, recall, precision, cosine; prefer fewer extras and fewer ingredients.
+        # Sort descending: effective score, title hits, fewer "unrelated" extras, then cosine.
         return (
-            float(f1),
+            effective_match,
+            float(name_hits),
+            -float(strong_extra_penalty),
             float(recall),
             float(precision),
             float(scores[i]),

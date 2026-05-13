@@ -21,6 +21,18 @@ def _recommend_url() -> str:
     return _DEFAULT_API.rstrip("/")
 
 
+def _api_base_url() -> str:
+    """Strip /recommend so we can call /generate-recipe on the same host."""
+    rec = _recommend_url()
+    if rec.endswith("/recommend"):
+        return rec[: -len("/recommend")].rstrip("/")
+    return rec.rstrip("/")
+
+
+def _generate_recipe_url() -> str:
+    return f"{_api_base_url()}/generate-recipe"
+
+
 st.set_page_config(
     page_title="Recipe Recommendation AI",
     page_icon="🍲",
@@ -157,6 +169,45 @@ if st.button("Recommend Recipes"):
                 """,
                 unsafe_allow_html=True
             )
+
+            st.subheader("✨ AI recipe (optional)")
+            st.caption(
+                "Uses your backend `/generate-recipe` (Groq). "
+                "Requires `GROQ_API_KEY` on Render."
+            )
+            if st.button("Expand best match with AI", key="gen_ai"):
+                gen_url = _generate_recipe_url()
+                with st.spinner("Generating detailed recipe…"):
+                    try:
+                        gen_resp = requests.post(
+                            gen_url,
+                            json={"ingredients": ingredients},
+                            timeout=120,
+                            headers={"Content-Type": "application/json"},
+                        )
+                    except requests.exceptions.RequestException as e:
+                        st.error(f"Could not call `{gen_url}`: {e}")
+                    else:
+                        if gen_resp.status_code == 503:
+                            st.warning(
+                                "API key missing: set **GROQ_API_KEY** in Render environment variables."
+                            )
+                        elif gen_resp.status_code == 404:
+                            st.info(gen_resp.json().get("detail", "No match for AI expansion."))
+                        elif gen_resp.status_code != 200:
+                            st.error(
+                                f"**{gen_resp.status_code}** — {gen_resp.text[:800]}"
+                            )
+                        else:
+                            try:
+                                payload = gen_resp.json()
+                            except ValueError:
+                                st.error("Response was not JSON.")
+                            else:
+                                st.markdown(
+                                    f"**{payload.get('recommended_recipe', 'Recipe')}**\n\n"
+                                    f"{payload.get('generated_recipe', '')}"
+                                )
 
             if len(recommendations) > 1:
                 st.subheader("More Recipes")
