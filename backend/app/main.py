@@ -13,39 +13,52 @@ from .schemas import RecommendationRequest
 _ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(_ENV_PATH)
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+_DEFAULT_GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+
+
+def _groq_client() -> Groq:
+    key = os.getenv("GROQ_API_KEY")
+    if not key:
+        raise HTTPException(
+            status_code=503,
+            detail="GROQ_API_KEY is not configured.",
+        )
+    return Groq(api_key=key)
 
 
 def generate_ai_recipe(recipe_name: str, ingredients: str) -> str:
+    """
+    Writes a full recipe for the dish the recommender already matched.
+    The model should treat this as the same recommendation the user saw in the app.
+    """
+    groq = _groq_client()
     prompt = f"""
-    Generate a detailed recipe.
+    You are the writing assistant for a recipe recommender app.
 
-    Recipe Name:
-    {recipe_name}
+    The recommender already matched the user's ingredients to this dish from its catalog:
+    **{recipe_name}**
 
-    Ingredients:
+    Base ingredient list from that match (use these; you may add small pantry staples if needed):
     {ingredients}
 
-    Include:
-    - recipe introduction
-    - step-by-step instructions
-    - serving suggestions
-
-    keep it professional and engaging.
+    Write one complete recipe for the user: short intro, ingredient list with amounts where reasonable,
+    clear step-by-step instructions, and serving tips. Do not claim a different dish name —
+    stay faithful to "{recipe_name}".
     """
 
-    response = client.chat.completions.create(
-        model="openai/gpt-oss-120b",
+    response = groq.chat.completions.create(
+        model=_DEFAULT_GROQ_MODEL,
         messages=[
             {
                 "role": "user",
-                "content": prompt,
+                "content": prompt.strip(),
             }
         ],
         temperature=0.5,
     )
 
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+    return (content or "").strip()
 
 
 app = FastAPI(
@@ -75,6 +88,10 @@ def recommend(data: RecommendationRequest):
 
 @app.post("/generate-recipe")
 def generate_recipe(data: RecommendationRequest):
+    """
+    Same flow as /recommend: we pick the best catalog match from the user's ingredients,
+    then generate a full write-up. For the UI this still reads as "recommended for you."
+    """
     if not os.getenv("GROQ_API_KEY"):
         raise HTTPException(
             status_code=503,
@@ -94,12 +111,23 @@ def generate_recipe(data: RecommendationRequest):
 
     best_recipe = recommendations[0]
 
-    generated_recipe = generate_ai_recipe(
+    full_recipe_text = generate_ai_recipe(
         best_recipe["name"],
         best_recipe["ingredients"],
     )
 
     return {
+        # Backward-compatible keys
         "recommended_recipe": best_recipe["name"],
-        "generated_recipe": generated_recipe,
+        "generated_recipe": full_recipe_text,
+        # Clear story for the frontend: catalog match + generated detail
+        "recommended_title": best_recipe["name"],
+        "catalog_cuisine": best_recipe["cuisine"],
+        "catalog_ingredients": best_recipe["ingredients"],
+        "catalog_instructions": best_recipe["instructions"],
+        "full_recipe": full_recipe_text,
+        "tagline": (
+            "Personalized recipe for your best match — "
+            "the dish name comes from the recommender; steps are generated for you."
+        ),
     }

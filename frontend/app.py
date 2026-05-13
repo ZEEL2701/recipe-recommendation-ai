@@ -3,13 +3,18 @@ import os
 import requests
 import streamlit as st
 
-# Full URL to POST /recommend (no trailing slash issues).
-# Override locally: set RECOMMEND_API_URL or add to .streamlit/secrets.toml on Streamlit Cloud:
-# RECOMMEND_API_URL = "https://your-service.onrender.com/recommend"
+# Default backend when nothing else is configured.
 _DEFAULT_API = "https://recipe-recommendation-ai.onrender.com/recommend"
+#
+# API URL resolution (works on self-hosted Streamlit, Docker, VPS, etc.):
+#   Set environment variable: RECOMMEND_API_URL=https://your-api.onrender.com/recommend
+#   Your process manager or host panel must inject env vars for the Streamlit process.
+# Optional: on Streamlit Community Cloud only, you can add the same key to .streamlit/secrets.toml
+#   RECOMMEND_API_URL = "https://..."
 
 
 def _recommend_url() -> str:
+    # Prefer OS env — usual for non-Cloud deployments.
     env = os.getenv("RECOMMEND_API_URL", "").strip()
     if env:
         return env.rstrip("/")
@@ -22,7 +27,6 @@ def _recommend_url() -> str:
 
 
 def _api_base_url() -> str:
-    """Strip /recommend so we can call /generate-recipe on the same host."""
     rec = _recommend_url()
     if rec.endswith("/recommend"):
         return rec[: -len("/recommend")].rstrip("/")
@@ -33,225 +37,224 @@ def _generate_recipe_url() -> str:
     return f"{_api_base_url()}/generate-recipe"
 
 
+def _init_session():
+    if "rec_query" not in st.session_state:
+        st.session_state.rec_query = ""
+    if "rec_list" not in st.session_state:
+        st.session_state.rec_list = None
+    if "rec_ai" not in st.session_state:
+        st.session_state.rec_ai = None
+    if "rec_ai_error" not in st.session_state:
+        st.session_state.rec_ai_error = None
+
+
+_init_session()
+
 st.set_page_config(
     page_title="Recipe Recommendation AI",
     page_icon="🍲",
-    layout="wide"
+    layout="wide",
 )
 
 
-# CUSTOM CSS
-st.markdown("""
+st.markdown(
+    """
 <style>
-
-.main {
-    padding-top: 2rem;
-}
-
+.main { padding-top: 2rem; }
 .recipe-card {
     background-color: #1e1e1e;
     padding: 20px;
     border-radius: 15px;
     margin-bottom: 20px;
 }
-
 .recipe-title {
     font-size: 28px;
     font-weight: bold;
     color: white;
 }
-
-.recipe-text {
-    color: #dcdcdc;
-    font-size: 16px;
-}
-
-.best-match {
-    border: 2px solid #ffb703;
-}
-
+.recipe-text { color: #dcdcdc; font-size: 16px; }
+.best-match { border: 2px solid #ffb703; }
 </style>
-""", unsafe_allow_html=True)
-
+""",
+    unsafe_allow_html=True,
+)
 
 st.title("🍲 Recipe Recommendation AI")
 
 st.write(
-    "Discover recipes based on ingredients you already have."
+    "Enter what you have — we **recommend** a dish from our catalog, then you can open a **full recipe** "
+    "written for that same recommendation."
 )
-
 
 ingredients = st.text_input(
     "Enter Ingredients",
-    placeholder="tomato onion cheese"
+    placeholder="tomato onion cheese",
+    key="ingredient_input",
 )
 
 
-if st.button("Recommend Recipes"):
-
-    if ingredients.strip() == "":
+def fetch_recommendations():
+    q = (st.session_state.get("ingredient_input") or "").strip()
+    if not q:
         st.warning("Please enter ingredients")
+        return
 
-    else:
-        api_url = _recommend_url()
+    api_url = _recommend_url()
+    try:
+        response = requests.post(
+            api_url,
+            json={"ingredients": q},
+            timeout=120,
+            headers={"Content-Type": "application/json"},
+        )
+    except requests.exceptions.Timeout:
+        st.error(
+            "The API took too long to respond. On Render’s free tier, try again after a cold start."
+        )
+        return
+    except requests.exceptions.RequestException as e:
+        st.error(f"Could not reach `{api_url}`.\n\n{e}")
+        return
 
-        try:
-            # Render free tier can cold-start ~30–60s; avoid silent hangs.
-            response = requests.post(
-                api_url,
-                json={"ingredients": ingredients},
-                timeout=120,
-                headers={"Content-Type": "application/json"},
-            )
-        except requests.exceptions.Timeout:
-            st.error(
-                "The API took too long to respond. On Render’s free tier the first "
-                "request after sleep can take a minute—try again once."
-            )
-            st.stop()
-        except requests.exceptions.RequestException as e:
-            st.error(f"Could not reach the API at `{api_url}`. Check the URL and your network.\n\n{e}")
-            st.stop()
+    if response.status_code != 200:
+        st.error(
+            f"API returned **{response.status_code}**.\n\n```\n{response.text[:500]}\n```"
+        )
+        return
 
-        if response.status_code != 200:
-            st.error(
-                f"API returned **{response.status_code}**. "
-                f"Body (first 500 chars):\n\n```\n{response.text[:500]}\n```"
-            )
-            st.stop()
+    try:
+        data = response.json()
+    except ValueError:
+        st.error("API did not return JSON.")
+        return
 
-        try:
-            data = response.json()
-        except ValueError:
-            st.error("API did not return JSON. Is the URL correct?")
-            st.stop()
+    recs = data.get("recommendations")
+    if recs is None:
+        st.error("Missing `recommendations` in response.")
+        return
 
-        recommendations = data.get("recommendations")
-        if recommendations is None:
-            st.error("Unexpected response: missing `recommendations` key.")
-            st.stop()
+    st.session_state.rec_query = q
+    st.session_state.rec_list = recs
+    st.session_state.rec_ai = None
+    st.session_state.rec_ai_error = None
 
-        if recommendations:
 
-            st.subheader("⭐ Best Match")
+if st.button("Recommend Recipes"):
+    fetch_recommendations()
 
-            best_recipe = recommendations[0]
 
-            st.markdown(
-                f"""
-                <div class="recipe-card best-match">
+def fetch_ai_recipe():
+    q = st.session_state.rec_query
+    if not q:
+        st.warning("Run **Recommend Recipes** first.")
+        return
 
-                <div class="recipe-title">
-                {best_recipe['name']}
-                </div>
+    gen_url = _generate_recipe_url()
+    try:
+        gen_resp = requests.post(
+            gen_url,
+            json={"ingredients": q},
+            timeout=120,
+            headers={"Content-Type": "application/json"},
+        )
+    except requests.exceptions.RequestException as e:
+        st.session_state.rec_ai_error = str(e)
+        st.session_state.rec_ai = None
+        return
 
-                <br>
+    if gen_resp.status_code == 503:
+        st.session_state.rec_ai_error = (
+            "AI is not configured on the server (set **GROQ_API_KEY** on Render)."
+        )
+        st.session_state.rec_ai = None
+        return
 
-                <div class="recipe-text">
-                🍽 <b>Cuisine:</b> {best_recipe['cuisine']}
-                </div>
+    if gen_resp.status_code == 404:
+        detail = gen_resp.json().get("detail", "No match.")
+        st.session_state.rec_ai_error = detail
+        st.session_state.rec_ai = None
+        return
 
-                <br>
+    if gen_resp.status_code != 200:
+        st.session_state.rec_ai_error = f"{gen_resp.status_code}: {gen_resp.text[:600]}"
+        st.session_state.rec_ai = None
+        return
 
-                <div class="recipe-text">
-                🥘 <b>Ingredients:</b><br>
-                {best_recipe['ingredients']}
-                </div>
+    try:
+        payload = gen_resp.json()
+    except ValueError:
+        st.session_state.rec_ai_error = "Invalid JSON from generate-recipe."
+        st.session_state.rec_ai = None
+        return
 
-                <br>
+    st.session_state.rec_ai = payload
+    st.session_state.rec_ai_error = None
 
-                <div class="recipe-text">
-                📖 <b>Instructions:</b><br>
-                {best_recipe['instructions']}
-                </div>
 
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+if st.session_state.rec_list:
+    recommendations = st.session_state.rec_list
 
-            st.subheader("✨ AI recipe (optional)")
-            st.caption(
-                "Uses your backend `/generate-recipe` (Groq). "
-                "Requires `GROQ_API_KEY` on Render."
-            )
-            if st.button("Expand best match with AI", key="gen_ai"):
-                gen_url = _generate_recipe_url()
-                with st.spinner("Generating detailed recipe…"):
-                    try:
-                        gen_resp = requests.post(
-                            gen_url,
-                            json={"ingredients": ingredients},
-                            timeout=120,
-                            headers={"Content-Type": "application/json"},
-                        )
-                    except requests.exceptions.RequestException as e:
-                        st.error(f"Could not call `{gen_url}`: {e}")
-                    else:
-                        if gen_resp.status_code == 503:
-                            st.warning(
-                                "API key missing: set **GROQ_API_KEY** in Render environment variables."
-                            )
-                        elif gen_resp.status_code == 404:
-                            st.info(gen_resp.json().get("detail", "No match for AI expansion."))
-                        elif gen_resp.status_code != 200:
-                            st.error(
-                                f"**{gen_resp.status_code}** — {gen_resp.text[:800]}"
-                            )
-                        else:
-                            try:
-                                payload = gen_resp.json()
-                            except ValueError:
-                                st.error("Response was not JSON.")
-                            else:
-                                st.markdown(
-                                    f"**{payload.get('recommended_recipe', 'Recipe')}**\n\n"
-                                    f"{payload.get('generated_recipe', '')}"
-                                )
+    st.subheader("⭐ Best match (from recommender)")
 
-            if len(recommendations) > 1:
-                st.subheader("More Recipes")
+    best_recipe = recommendations[0]
 
-                cols = st.columns(2)
+    st.markdown(
+        f"""
+        <div class="recipe-card best-match">
+        <div class="recipe-title">{best_recipe['name']}</div>
+        <br>
+        <div class="recipe-text">🍽 <b>Cuisine:</b> {best_recipe['cuisine']}</div>
+        <br>
+        <div class="recipe-text">🥘 <b>Ingredients:</b><br>{best_recipe['ingredients']}</div>
+        <br>
+        <div class="recipe-text">📖 <b>Instructions:</b><br>{best_recipe['instructions']}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-                for idx, recipe in enumerate(recommendations[1:]):
+    st.subheader("Full recipe for your recommendation")
+    st.caption(
+        "Uses the **same** best match the recommender chose. The long version is generated for that dish — "
+        "so it still feels like *your* recommendation, not a random AI recipe."
+    )
 
-                    with cols[idx % 2]:
+    if st.button("Get full personalized recipe", key="gen_ai"):
+        with st.spinner("Writing your recipe…"):
+            fetch_ai_recipe()
 
-                        st.markdown(
-                            f"""
-                            <div class="recipe-card">
+    if st.session_state.rec_ai_error:
+        st.error(st.session_state.rec_ai_error)
 
-                            <div class="recipe-title">
-                            {recipe['name']}
-                            </div>
+    if st.session_state.rec_ai:
+        p = st.session_state.rec_ai
+        title = p.get("recommended_title") or p.get("recommended_recipe", "Recipe")
+        st.success(f"**{title}** — personalized steps below.")
+        if p.get("tagline"):
+            st.caption(p["tagline"])
+        body = p.get("full_recipe") or p.get("generated_recipe", "")
+        st.markdown(body)
 
-                            <br>
-
-                            <div class="recipe-text">
-                            🍽 <b>Cuisine:</b> {recipe['cuisine']}
-                            </div>
-
-                            <br>
-
-                            <div class="recipe-text">
-                            🥘 <b>Ingredients:</b><br>
-                            {recipe['ingredients']}
-                            </div>
-
-                            <br>
-
-                            <div class="recipe-text">
-                            📖 <b>Instructions:</b><br>
-                            {recipe['instructions']}
-                            </div>
-
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
-        else:
-            st.info(
-                "No recipes matched those ingredients (or the score was below the API threshold). "
-                "Try different or more ingredients."
-            )
+    if len(recommendations) > 1:
+        st.subheader("More recipes")
+        cols = st.columns(2)
+        for idx, recipe in enumerate(recommendations[1:]):
+            with cols[idx % 2]:
+                st.markdown(
+                    f"""
+                    <div class="recipe-card">
+                    <div class="recipe-title">{recipe['name']}</div>
+                    <br>
+                    <div class="recipe-text">🍽 <b>Cuisine:</b> {recipe['cuisine']}</div>
+                    <br>
+                    <div class="recipe-text">🥘 <b>Ingredients:</b><br>{recipe['ingredients']}</div>
+                    <br>
+                    <div class="recipe-text">📖 <b>Instructions:</b><br>{recipe['instructions']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+elif st.session_state.rec_query and st.session_state.rec_list == []:
+    st.info(
+        "No recipes matched (or similarity was below the API threshold). Try other ingredients."
+    )
