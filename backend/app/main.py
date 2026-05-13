@@ -29,13 +29,28 @@ def _groq_client() -> Groq:
 def _parse_allergies(allergies: Optional[str]) -> List[str]:
     if not allergies:
         return []
-    # Split on commas/semicolons/newlines; normalize to lowercase tokens.
-    parts = re.split(r"[,\n;]+", allergies)
+    # Accept common list styles:
+    # - "milk, sugar"
+    # - "milk\nsugar"
+    # - "milk sugar" (space-separated)
+    raw = allergies.strip().lower()
+    if not raw:
+        return []
+
+    parts = re.split(r"[,\n;]+", raw)
     cleaned: List[str] = []
     for p in parts:
-        t = p.strip().lower()
-        if t:
-            cleaned.append(t)
+        token = p.strip()
+        if not token:
+            continue
+        cleaned.append(token)
+        # If user typed a space-separated list inside one part ("milk sugar"),
+        # also include each word as an allergy token.
+        if " " in token:
+            for w in token.split():
+                if w and w not in cleaned:
+                    cleaned.append(w)
+
     return cleaned
 
 
@@ -85,6 +100,15 @@ def generate_top_recipes_ai(
         pattern = rf"(?<![a-z0-9]){re.escape(a)}(?![a-z0-9])"
         cleaned_ingredients = re.sub(pattern, " ", cleaned_ingredients, flags=re.IGNORECASE)
     cleaned_ingredients = re.sub(r"\s+", " ", cleaned_ingredients).strip()
+
+    if not cleaned_ingredients:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No usable ingredients remain after applying allergies. "
+                "Please remove conflicting entries or add alternative ingredients."
+            ),
+        )
 
     groq = _groq_client()
     candidate_n = max(6, top_n * 2)
