@@ -82,8 +82,8 @@ st.markdown(
 st.title("🍲 Recipe Recommendation AI")
 
 st.write(
-    "Enter what you have — we **recommend** a dish from our catalog, then you can open a **full recipe** "
-    "written for that same recommendation."
+    "Enter what you have — we **generate** recipe ideas with AI from your ingredients, then you can open a "
+    "**full recipe** written for the same pick."
 )
 
 ingredients = st.text_input(
@@ -235,7 +235,7 @@ def fetch_ai_recipe():
 if st.session_state.rec_list:
     recommendations = st.session_state.rec_list
 
-    st.subheader("⭐ Best match (from recommender)")
+    st.subheader("⭐ Best match (AI-generated)")
 
     best_recipe = recommendations[0]
 
@@ -256,8 +256,8 @@ if st.session_state.rec_list:
 
     st.subheader("Full recipe for your recommendation")
     st.caption(
-        "Uses the **same** best match the recommender chose. The long version is generated for that dish — "
-        "so it still feels like *your* recommendation, not a random AI recipe."
+        "Uses the **same** best match you see above. The long version is generated for that dish — "
+        "so it stays tied to your chosen idea."
     )
 
     if st.button("Get full personalized recipe", key="gen_ai"):

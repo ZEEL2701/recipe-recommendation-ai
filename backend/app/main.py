@@ -222,7 +222,7 @@ def generate_recipe_detail_ai(
     cuisine_text = (cuisine or "").strip() or "any"
 
     prompt = f"""
-You are writing the final detailed recipe for a dish selected by the recommender.
+You are writing the final detailed recipe for a dish the user chose from the AI recommendations.
 
 Dish name (do not change):
 {recipe_name}
